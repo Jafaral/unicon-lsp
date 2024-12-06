@@ -11,7 +11,13 @@
 			"id" : "unicon",
 			"extensions" : [ ".icn" ],
 			"aliases" : [ "Unicon", "unicon", "icon" ]
-		}] 
+		}],
+    	"commands": [
+      	  {
+        	"command": "extension.loadLsifFile",
+        	"title": "Load LSIF File"
+      	  }
+    	]
 	},
 	"activationEvents": [
 		"onLanguage:unicon"
@@ -29,6 +35,7 @@
 		"type": "git",
 		"url": "https://github.com/HereBeCode/unicon-lsp"
 	},
+	
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
 		"compile": "tsc -b",
