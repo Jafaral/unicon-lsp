@@ -3,196 +3,218 @@ import { nextTick } from 'process';
 import * as vscode from 'vscode';
 
 interface LSIFDatabase {
-    vertices: Map<string, any>;
-    edges: Map<string, any>;
+    documents: Map<string, { vertices: any[]; edges: any[] }>; 
+    vertexIdToDocument: Map<number, string>;
 }
 
+// Backend class for LSIF processing. Scans for the .lsif file and reads in data, saving
+// vertices and edges per document for faster processing. Provides functions for parsing
+// through saved database to return hover, definition, and references data. 
 export class LSIFBackend {
     private database: LSIFDatabase;
-    private outputChannel: vscode.OutputChannel;
+    private lsifChannel: vscode.OutputChannel;
+    private currentDocumentUri: string | null = null;
+    private enableDebugLogs: boolean = false;
 
-    constructor(outputChannel: vscode.OutputChannel) {
-        this.database = { vertices: new Map(), edges: new Map() };
-        this.outputChannel = outputChannel;
+    constructor(lsifChannel: vscode.OutputChannel) {
+        this.database = { documents: new Map(), vertexIdToDocument: new Map() };
+        this.lsifChannel = lsifChannel;
     }
 
+    // Updates whether or not logger messages go through
+    updateDebugSetting(enabled: boolean): void {
+        this.enableDebugLogs = enabled;
+        this.lsifChannel.appendLine(`[Config] LSIF debug logging is ${enabled ? "ENABLED" : "DISABLED"}.`);
+    }
+
+    // If debug messages are enabled the logger will send them through
+    private logger(message: string): void {
+        if (this.enableDebugLogs) {
+            this.lsifChannel.appendLine(message);
+        }
+    }
+
+    // Reads in and loads the given file for LSIF JSON information and splits it up according
+    // to connected document and by vertices and edges
     load(filePath: string): void {
-        this.outputChannel.appendLine(`[Database] Loading LSIF file into backend from: ${filePath}`);
-        const fileContent = fs.readFileSync(filePath, 'utf8');
+        this.lsifChannel.appendLine(`[Database] Loading LSIF file into backend from: ${filePath}`);
+        
+        const fileContent = fs.readFileSync(filePath, 'utf-8');
         const lines = fileContent.split('\n').filter(line => line.trim() !== '');
+        
         lines.forEach(line => {
             const obj = JSON.parse(line);
-            if (obj.type === 'vertex') {
-                this.database.vertices.set(obj.id, obj);
-            } else if (obj.type === 'edge') {
-                this.database.edges.set(obj.id, obj);
+            
+            if (obj.label === "document" && obj.type === "vertex") {
+                this.currentDocumentUri = obj.uri;
+                if (!this.database.documents.has(this.currentDocumentUri)) {
+                    this.database.documents.set(this.currentDocumentUri, { vertices: [], edges: [] });
+                    this.database.vertexIdToDocument.set(obj.id, this.currentDocumentUri);
+                }
+            }
+            
+            if (this.currentDocumentUri) {
+                if (obj.type === "vertex") {
+                    this.database.documents.get(this.currentDocumentUri)!.vertices.push(obj);
+                } else if (obj.type === "edge") {
+                    this.database.documents.get(this.currentDocumentUri)!.edges.push(obj);
+                }
+            }
+
+            if (obj.label === "contains" && obj.type === "edge") {
+                this.currentDocumentUri = "unsorted";
+                if (!this.database.documents.has(this.currentDocumentUri)) {
+                    this.database.documents.set(this.currentDocumentUri, { vertices: [], edges: [] });
+                }
             }
         });
-        this.outputChannel.appendLine(`[Database] Loaded ${this.database.vertices.size} vertices and ${this.database.edges.size} edges.`);
+        
+        const unsortedData = this.database.documents.get("unsorted");
+        if (unsortedData) {
+            for (const edge of unsortedData.edges) {
+                if (edge.label === "item" && edge.shard) {
+                    const targetDocUri = this.database.vertexIdToDocument.get(edge.shard);
+                    if (targetDocUri) {
+                        this.database.documents.get(targetDocUri)!.edges.push(edge);
+                        //this.logger(`Edge added to ${targetDocUri}: ${JSON.stringify(edge)}`);
+                        const edgeMinus1 = this.database.documents.get("unsorted")?.edges.find(e => e.id === edge.id - 1);
+                        if (edgeMinus1) {
+                            this.database.documents.get(targetDocUri)!.edges.push(edgeMinus1);
+                            //this.logger(`Edge added to ${targetDocUri}: ${JSON.stringify(edgeMinus1)}`);
+                        }
+                        const vertexMinus2 = this.database.documents.get("unsorted")?.vertices.find(v => v.id === edge.id - 2);
+                        if (vertexMinus2) {
+                            this.database.documents.get(targetDocUri)!.vertices.push(vertexMinus2);
+                            //this.logger(`Vertex added to ${targetDocUri}: ${JSON.stringify(vertexMinus2)}`);
+                        }
+                    }
+                }
+            }  
+            this.database.documents.delete("unsorted");
+        }
+        
+        this.lsifChannel.appendLine(`[Database] Finished loading LSIF data.`);
+        this.database.documents.forEach((data, uri) => {
+            this.logger(`[Database] Document: ${uri}, Vertices: ${data.vertices.length}, Edges: ${data.edges.length}`);
+        });
     }
 
+    // Function to retrieve hover data for a given document and position
     getHoverData(documentUri: string, position: { line: number; character: number }): string | null {
-        //fix the "%3A" thing
         documentUri = decodeURIComponent(documentUri);
-        //Move line and character up by one because ulsp has it back one for each
         position.line += 1;
         position.character += 1;
-        this.outputChannel.appendLine('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~');
-        this.outputChannel.appendLine(`[Hover Help] Hover request for URI: ${documentUri} at position: ${position.line}:${position.character}`);
-
-        //look for a document first that matches the request URI
-        let documentVertex: any | undefined;
-        for (const vertex of this.database.vertices.values()) {
-            if (vertex.label === 'document' && vertex.uri === documentUri) {
-                documentVertex = vertex;
-                break;
-            }
-        }
+        this.logger(`~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`);
+        this.logger(`[Hover Help] Hover request for URI: ${documentUri} at position: ${position.line}:${position.character}`);
         
-        //if no document is found, cry
-        if (!documentVertex) {
-            this.outputChannel.appendLine(`[Hover Help] No Document vertex found for URI: ${documentUri}`);
+        // Find the correct document 
+        const documentData = this.database.documents.get(documentUri);
+        if (!documentData) {
+            this.logger(`[Hover Help] No document found for URI: ${documentUri}`);
             return null;
         }
         
-        //this.outputChannel.appendLine(`[Hover Help] Document vertex found: ${JSON.stringify(documentVertex)}`);
-        
-        //look for a contains edge that has outV pointing out of document and inVs pointing to ranges
-        let containsEdge: any | undefined;
-        for (const edge of this.database.edges.values()) {
-            if (edge.label === 'contains' && edge.outV === documentVertex.id) {
-                containsEdge = edge;
-                break;
-            }
-        }
-        
-        //if no contains edge, cry
+        // Find the contains edge that links all the ranges to the document
+        let containsEdge = documentData.edges.find(edge => edge.label === 'contains');
         if (!containsEdge) {
-            this.outputChannel.appendLine(`[Hover Help] No Contains edge found for document ID: ${documentVertex.id}`);
+            this.logger(`[Hover Help] No contains edge found for document: ${documentUri}`);
             return null;
         }
-    
-        //this.outputChannel.appendLine(`[Hover Help] Contains edge found: ${JSON.stringify(containsEdge)}`);
         
-        //loop through every range that contains edge points to
+        // Loop through the ranges in the contains edge to find the matching range to our requested position
         for (const rangeId of containsEdge.inVs) {
-            const range = this.database.vertices.get(rangeId);
-            //this.outputChannel.appendLine(`[Hover Help] Checking range: start(${range.start.line}, ${range.start.character}) - end(${range.end.line}, ${range.end.character})`);
+            const range = documentData.vertices.find(vertex => vertex.id === rangeId);
+            if (!range || range.label !== 'range') continue;
             
-            //if requested position is within start and end of range match it
             if (position.line >= range.start.line && position.line <= range.end.line &&
                 position.character >= range.start.character && position.character <= range.end.character) {
                 
-                this.outputChannel.appendLine(`[Hover Help] Position matched range: ${JSON.stringify(range)}`);
+                this.logger(`[Hover Help] Position matched range: ${JSON.stringify(range)}`);
                 
-                //for matched range, loop through edges to find either a next edge or a textDocument/hover edge that matches
-                for (const edge of this.database.edges.values()) {
+                // For matched range, loop through edges to find either a next edge or a textDocument/hover edge that matches
+                for (const edge of documentData.edges) {
                     if (edge.label === 'next' && edge.outV === range.id) {
-                        for (const edge2 of this.database.edges.values()) {
+                        this.logger(`[Hover Help] Range matched next edge: ${JSON.stringify(edge)}`);
+                        for (const edge2 of documentData.edges) {
                             if (edge2.label === 'textDocument/hover' && edge2.outV === edge.inV) {
+                                this.logger(`[Hover Help] Next edge matched textDocument/hover edge: ${JSON.stringify(edge2)}`);
                                 //get inV ID that matches to hoverResult vertex
-                                const hoverResult = this.database.vertices.get(edge2.inV);
+                                const hoverResult = documentData.vertices.find(vertex2 => vertex2.id === edge2.inV);
                                 if (hoverResult && hoverResult.label === 'hoverResult') {
-                                    this.outputChannel.appendLine(`[Hover Help] Hover result found: ${JSON.stringify(hoverResult)}`);
+                                    this.logger(`[Hover Help] Hover result found: ${JSON.stringify(hoverResult)}`);
                                     return hoverResult.result.contents.map((content: any) => content.value).join('\n');
                                 }
                             }
                         }
                     } else if (edge.label === 'textDocument/hover' && edge.outV === range.id) {
+                        this.logger(`[Hover Help] Range matched textDocument/hover edge without next: ${JSON.stringify(edge)}`);
                         //get inV ID that matches to hoverResult vertex
-                        const hoverResult = this.database.vertices.get(edge.inV);
-                        if (hoverResult && hoverResult.label === 'hoverResult') {
-                            this.outputChannel.appendLine(`[Hover Help] Hover result found: ${JSON.stringify(hoverResult)}`);
-                            return hoverResult.result.contents.map((content: any) => content.value).join('\n');
-                        }
+                        const hoverResult = documentData.vertices.find(vertex3 => vertex3.id === edge.inV);
+                        this.logger(`[Hover Help] Hover result found: ${JSON.stringify(hoverResult)}`);
+                        return hoverResult.result.contents.map((content: any) => content.value).join('\n');
                     }
                 }
             }
         }
-        this.outputChannel.appendLine('[Hover Help] No hover data matched.');
+        
+        this.logger('[Hover Help] No hover data matched.');
         return null;
     }
 
+    // Function to retrieve definition data for a given document and position
     getDefinitionData(documentUri: string, position: { line: number; character: number }): vscode.Location[] | null {
-        //fix the "%3A" thing
         documentUri = decodeURIComponent(documentUri);
-        //Move line and character up by one because ulsp has it back one for each
         position.line += 1;
         position.character += 1;
-        this.outputChannel.appendLine('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~');
-        this.outputChannel.appendLine(`[Definition Help] Definition requested for URI: ${documentUri} at position: ${position.line}:${position.character}`);
+        this.logger(`~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`);
+        this.logger(`[Definition Help] Definition requested for URI: ${documentUri} at position: ${position.line}:${position.character}`);
         
-        //look for a document first that matches the request URI
-        let documentVertex: any | undefined;
-        for (const vertex of this.database.vertices.values()) {
-            if (vertex.label === 'document' && vertex.uri === documentUri) {
-                documentVertex = vertex;
-                break;
-            }
-        }
-        
-        //if no document is found, cry
-        if (!documentVertex) {
-            this.outputChannel.appendLine(`[Definition Help] No Document vertex found for URI: ${documentUri}`);
+        // Find the correct document
+        const documentData = this.database.documents.get(documentUri);
+        if (!documentData) {
+            this.logger(`[Definition Help] No document found for URI: ${documentUri}`);
             return null;
         }
-        //this.outputChannel.appendLine(`[Definition Help] Document vertex found: ${JSON.stringify(documentVertex)}`);
         
-        //look for a contains edge that has outV pointing out of document and inVs pointing to ranges
-        let containsEdge: any | undefined;
-        for (const edge of this.database.edges.values()) {
-            if (edge.label === 'contains' && edge.outV === documentVertex.id) {
-                containsEdge = edge;
-                break;
-            }
-        }
-        
-        //if no contains edge, cry
+        // Find the contains edge linked to that document
+        const containsEdge = documentData.edges.find(edge => edge.label === 'contains');
         if (!containsEdge) {
-            this.outputChannel.appendLine(`[Definition Help] No Contains edge found for document ID: ${documentVertex.id}`);
+            this.logger(`[Definition Help] No contains edge found for document: ${documentUri}`);
             return null;
         }
-        //this.outputChannel.appendLine(`[Definition Help] Contains edge found: ${JSON.stringify(containsEdge)}`);
         
         const locations: vscode.Location[] = [];
-        //loop through every range that contains edge points to
-        for (const rangeID of containsEdge.inVs) {
-            const range = this.database.vertices.get(rangeID);
-            //this.outputChannel.appendLine(`[Definition Help] Checking range: start(${range.start.line}, ${range.start.character}) - end(${range.end.line}, ${range.end.character})`);
+
+        // Loop through the ranges in the contains edge to find one that matches the requested position
+        for (const rangeId of containsEdge.inVs) {
+            const range = documentData.vertices.find(vertex => vertex.id === rangeId);
+            if (!range || range.label !== 'range') continue;
             
-            //if requested position is within start and end of range match it
             if (position.line >= range.start.line && position.line <= range.end.line &&
                 position.character >= range.start.character && position.character <= range.end.character) {
                 
-                this.outputChannel.appendLine(`[Definition Help] Position matched range: ${JSON.stringify(range)}`);
+                this.logger(`[Definition Help] Position matched range: ${JSON.stringify(range)}`);
+                
+                // Loop through and search for an item edge that contains the range id of the reference
+                for (const referenceItem of documentData.edges) {
+                    if (referenceItem.label === "item" && referenceItem.inVs?.includes(range.id)) {
+                        // Loop through all documents searching for definitions
+                        for (const [docUri, definitionData] of this.database.documents.entries()) {
+                            const definitionContainsEdge = definitionData.edges.find(edge => edge.label === 'contains');
+                            if (!definitionContainsEdge) continue;
 
-                for (const referenceItem of this.database.edges.values()) {
-                    if (referenceItem.label === "item" && referenceItem.inVs !== undefined && referenceItem.inVs.includes(range.id)) {
-                        this.outputChannel.appendLine(`[Definition Help] Found reference: ${JSON.stringify(referenceItem)}`);
-                        for (const definedItem of this.database.edges.values()) {
-                            if (definedItem.label === "item" && definedItem.outV === referenceItem.outV && definedItem.property === "definitions") {
-                                this.outputChannel.appendLine(`[Definition Help] Found definition: ${JSON.stringify(definedItem)}`);
-                                documentVertex = this.database.vertices.get(definedItem.shard)
-                                for (const edge of this.database.edges.values()) {
-                                    if (edge.label === 'contains' && edge.outV === documentVertex.id) {
-                                        containsEdge = edge;
-                                        break;
-                                    }
-                                }
-                                if (!containsEdge) {
-                                    this.outputChannel.appendLine(`[Definition Help] No Contains edge found for document ID: ${documentVertex.id}`);
-                                    return null;
-                                }
-                                for (const rangeDefinedItemID of containsEdge.inVs) {
-                                    if (definedItem.inVs.includes(rangeDefinedItemID)) {
-                                        const rangeDefinedItem = this.database.vertices.get(rangeDefinedItemID);
-                                        this.outputChannel.appendLine(`[Definition Help] Found range of definition: ${JSON.stringify(rangeDefinedItem)}`);
+                            // Loop through and search for an item edge corresponding to the referenced item's outV field
+                            for (const definedItem of definitionData.edges) {
+                                if (definedItem.label === "item" && definedItem.outV === referenceItem.outV && definedItem.property === "definitions") {
+                                    const definitionDocUri = this.database.vertexIdToDocument.get(definedItem.shard) || docUri;
+
+                                    // Find the position of the definition and return it
+                                    const rangeDefinedItem = definitionData.vertices.find(vertex => definedItem.inVs.includes(vertex.id));
+                                    if (rangeDefinedItem) {
                                         locations.push(new vscode.Location(
-                                            vscode.Uri.parse(documentVertex.uri),
-                                            new vscode.Range(
-                                                new vscode.Position(rangeDefinedItem.start.line-1, rangeDefinedItem.start.character-1),
-                                                new vscode.Position(rangeDefinedItem.end.line-1, rangeDefinedItem.end.character-1)
-                                            )
+                                            vscode.Uri.parse(definitionDocUri),
+                                            new vscode.Range(new vscode.Position(rangeDefinedItem.start.line - 1, rangeDefinedItem.start.character - 1),
+                                                             new vscode.Position(rangeDefinedItem.end.line - 1, rangeDefinedItem.end.character - 1))
                                         ));
                                     }
                                 }
@@ -202,145 +224,125 @@ export class LSIFBackend {
                 }
             }
         }
+        
         if (locations.length === 0) {
-            this.outputChannel.appendLine(`[Definition Help] No definition locations found.`);
+            this.logger(`[Definition Help] No definition locations found.`);
             return null;
         }
-    
-        //this.outputChannel.appendLine(`[Definition Help] Definition location found: ${JSON.stringify(locations)}`);
         return locations;
     }
 
+    // Function to retrieve references data for a given document and position
     getReferencesData(documentUri: string, position: { line: number; character: number }): vscode.Location[] | null {
-        //fix the "%3A" thing
         documentUri = decodeURIComponent(documentUri);
-        //Move line and character up by one because ulsp has it back one for each
         position.line += 1;
         position.character += 1;
-        this.outputChannel.appendLine('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~');
-        this.outputChannel.appendLine(`[References Help] Reference requested for URI: ${documentUri} at position: ${position.line}:${position.character}`);
-
-        //look for a document first that matches the request URI
-        let documentVertex: any | undefined;
-        for (const vertex of this.database.vertices.values()) {
-            if (vertex.label === 'document' && vertex.uri === documentUri) {
-                documentVertex = vertex;
-                break;
-            }
-        }
+        this.logger(`~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`);
+        this.logger(`[References Help] Reference requested for URI: ${documentUri} at position: ${position.line}:${position.character}`);
         
-        //if no document is found, cry
-        if (!documentVertex) {
-            this.outputChannel.appendLine(`[References Help] No Document vertex found for URI: ${documentUri}`);
+        // Find the correct document
+        const documentData = this.database.documents.get(documentUri);
+        if (!documentData) {
+            this.logger(`[References Help] No document found for URI: ${documentUri}`);
             return null;
         }
         
-        //look for a contains edge that has outV pointing out of document and inVs pointing to ranges
-        let containsEdge: any | undefined;
-        for (const edge of this.database.edges.values()) {
-            if (edge.label === 'contains' && edge.outV === documentVertex.id) {
-                containsEdge = edge;
-                break;
-            }
-        }
-        
-        //if no contains edge, cry
+        // Find the contains edge linked to that document
+        const containsEdge = documentData.edges.find(edge => edge.label === 'contains');
         if (!containsEdge) {
-            this.outputChannel.appendLine(`[References Help] No Contains edge found for document ID: ${documentVertex.id}`);
+            this.logger(`[References Help] No contains edge found for document: ${documentUri}`);
             return null;
         }
         
-        //loop through every range that contains edge points to
+        // Loop through the ranges in the contains edge and look for the range with the requested position
         let rangeVertex: any | undefined;
         for (const rangeID of containsEdge.inVs) {
-            const range = this.database.vertices.get(rangeID);
-            
-            //if requested position is within start and end of range match it
-            if (position.line >= range.start.line && position.line <= range.end.line &&
+            const range = documentData.vertices.find(vertex => vertex.id === rangeID);
+            if (range && range.label === 'range' &&
+                position.line >= range.start.line && position.line <= range.end.line &&
                 position.character >= range.start.character && position.character <= range.end.character) {
                 rangeVertex = range;
-                this.outputChannel.appendLine(`[References Help] Position matched range: ${JSON.stringify(range)}`);
-            }
-        }
-    
-        //if no range vertex, cry
-        if (!rangeVertex) {
-            this.outputChannel.appendLine('[References Help] No range vertex found for position.');
-            return null;
-        }
-        this.outputChannel.appendLine(`[References Help] Range vertex found: ${JSON.stringify(rangeVertex)}`);
-    
-        // look for a resultSet vertex that matches this range
-        let resultSetVertex: any | undefined;
-        for (const edge of this.database.edges.values()) {
-            if (edge.label === 'next' && edge.outV === rangeVertex.id) {
-                resultSetVertex = this.database.vertices.get(edge.inV);
+                this.logger(`[References Help] Position matched range: ${JSON.stringify(range)}`);
                 break;
-            }
-        }
-    
-        //if no resultSet, cry
-        if (!resultSetVertex || resultSetVertex.label !== 'resultSet') {
-            this.outputChannel.appendLine('[References Help] No resultSet vertex found for range.');
-            return null;
-        }
-        this.outputChannel.appendLine(`[References Help] ResultSet vertex found: ${JSON.stringify(resultSetVertex)}`);
-    
-        //look for a referenceResult vertex
-        let referenceResult: any | undefined;
-        for (const edge of this.database.edges.values()) {
-            if (edge.label === 'textDocument/references' && edge.outV === resultSetVertex.id) {
-                referenceResult = this.database.vertices.get(edge.inV);
-                break;
-            }
-        }
-    
-        //if no referenceResult, cry
-        if (!referenceResult || referenceResult.label !== 'referenceResult') {
-            this.outputChannel.appendLine('[References Help] No reference result found for resultSet.');
-            return null;
-        }
-        this.outputChannel.appendLine(`[References Help] Reference result found: ${JSON.stringify(referenceResult)}`);
-    
-        //look for any item edges that link to the referenceResult
-        const itemEdges: any[] = [];
-        for (const edge of this.database.edges.values()) {
-            if (edge.label === 'item' && edge.outV === referenceResult.id && edge.property !== undefined && edge.property === "references") {
-                itemEdges.push(edge);
             }
         }
         
-        //if no item edge, cry
-        if (itemEdges.length === 0) {
-            this.outputChannel.appendLine('[References Help] No item edges found for reference result.');
+        if (!rangeVertex) {
+            this.logger('[References Help] No range vertex found for position.');
             return null;
         }
-        this.outputChannel.appendLine(`[References Help] Item edge found: ${JSON.stringify(itemEdges)}`);
-    
-        const locations: vscode.Location[] = [];
-        for (const itemEdge of itemEdges) {
-            const documentVertex = this.database.vertices.get(itemEdge.shard);
-            if (!documentVertex) {
-                this.outputChannel.appendLine(`[References Help] No document vertex found for shard ${itemEdge.shard}.`);
-                continue;
-            }
+        
+        // Find an edge vertex that links to the resultSet
+        const resultSetEdge = documentData.edges.find(edge => edge.label === 'next' && edge.outV === rangeVertex.id);
+        if (!resultSetEdge) {
+            this.logger('[References Help] No resultSet edge found for range.');
+            return null;
+        }
+        this.logger(`[References Help] Found resultSetEdge: ${JSON.stringify(resultSetEdge)}`);
+        
+        // Find the resultSet vertex from the edge
+        const resultSetVertex = documentData.vertices.find(vertex => vertex.id === resultSetEdge.inV && vertex.label === 'resultSet');
+        if (!resultSetVertex) {
+            this.logger('[References Help] No resultSet vertex found for range.');
+            return null;
+        }
+        this.logger(`[References Help] Found resultSetVertex: ${JSON.stringify(resultSetVertex)}`);
 
+        // Find the textDocument/references edge
+        const referenceEdge = documentData.edges.find(edge => edge.label === 'textDocument/references' && edge.outV === resultSetVertex.id);
+        if (!referenceEdge) {
+            this.logger('[References Help] No reference result found for resultSet.');
+            return null;
+        }
+        this.logger(`[References Help] Found referenceEdge: ${JSON.stringify(referenceEdge)}`);
+
+        // Find the corresponding referenceResult
+        const referenceResult = documentData.vertices.find(vertex => vertex.id === referenceEdge.inV && vertex.label === 'referenceResult');
+        if (!referenceResult) {
+            this.logger('[References Help] No reference result vertex found.');
+            return null;
+        }
+        this.logger(`[References Help] Found referenceResult: ${JSON.stringify(referenceResult)}`);
+
+        // Loop through and find all possible reference edges for that referenceResult
+        let referenceEdges: any[] = [];
+        for (const [uri, docData] of this.database.documents.entries()) {
+            const items = docData.edges.filter(edge => edge.label === "item" && edge.outV === referenceResult.id && edge.property === 'references');
+            referenceEdges = referenceEdges.concat(items);
+            this.logger(`[References Help] Current referenceEdges: ${JSON.stringify(referenceResult)}`);
+        }
+        
+        if (referenceEdges.length === 0) {
+            this.logger(`[References Help] No item edges found for reference result.`);
+            return null;
+        }
+
+        // Loop through the reference edges for item edges in matched documents
+        const locations: vscode.Location[] = [];
+        for (const itemEdge of referenceEdges) {
+            const targetDocumentUri = this.database.vertexIdToDocument.get(itemEdge.shard) || documentUri;
+            const targetDocumentData = this.database.documents.get(targetDocumentUri);
+            if (!targetDocumentData) continue;
+    
+            // Loop through the ranges of the item edges of the found references and save their position
             for (const rangeId of itemEdge.inVs) {
-                const referenceRange = this.database.vertices.get(rangeId);
-                if (referenceRange && referenceRange.label === 'range') {
-                    locations.push(new vscode.Location(vscode.Uri.parse(documentVertex.uri),
-                    new vscode.Range(new vscode.Position(referenceRange.start.line - 1, referenceRange.start.character - 1),
-                    new vscode.Position(referenceRange.end.line - 1, referenceRange.end.character - 1))));
+                const referenceRange = targetDocumentData.vertices.find(vertex => vertex.id === rangeId && vertex.label === 'range');
+                if (referenceRange) {
+                    locations.push(new vscode.Location(
+                        vscode.Uri.parse(targetDocumentUri),
+                        new vscode.Range(new vscode.Position(referenceRange.start.line - 1, referenceRange.start.character - 1),
+                                         new vscode.Position(referenceRange.end.line - 1, referenceRange.end.character - 1))
+                    ));
                 }
             }
         }
 
         if (locations.length === 0) {
-            this.outputChannel.appendLine('[References Help] No references found.');
+            this.logger('[References Help] No references found.');
             return null;
         }
-    
-        //this.outputChannel.appendLine(`[References Help] References found: ${JSON.stringify(locations)}`);
+        
+        // Return all positions found for references if any
         return locations;
     }
 }
