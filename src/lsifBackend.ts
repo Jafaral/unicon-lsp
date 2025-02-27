@@ -1,15 +1,14 @@
 import * as fs from 'fs';
-import { nextTick } from 'process';
 import * as vscode from 'vscode';
 
 interface LSIFDatabase {
-    documents: Map<string, { vertices: any[]; edges: any[] }>; 
+    documents: Map<string, { vertices: any[]; edges: any[] }>;
     vertexIdToDocument: Map<number, string>;
 }
 
 // Backend class for LSIF processing. Scans for the .lsif file and reads in data, saving
 // vertices and edges per document for faster processing. Provides functions for parsing
-// through saved database to return hover, definition, and references data. 
+// through saved database to return hover, definition, and references data.
 export class LSIFBackend {
     private database: LSIFDatabase;
     private lsifChannel: vscode.OutputChannel;
@@ -38,13 +37,13 @@ export class LSIFBackend {
     // to connected document and by vertices and edges
     load(filePath: string): void {
         this.lsifChannel.appendLine(`[Database] Loading LSIF file into backend from: ${filePath}`);
-        
+
         const fileContent = fs.readFileSync(filePath, 'utf-8');
         const lines = fileContent.split('\n').filter(line => line.trim() !== '');
-        
+
         lines.forEach(line => {
             const obj = JSON.parse(line);
-            
+
             if (obj.label === "document" && obj.type === "vertex") {
                 this.currentDocumentUri = obj.uri;
                 if (!this.database.documents.has(this.currentDocumentUri)) {
@@ -52,7 +51,7 @@ export class LSIFBackend {
                     this.database.vertexIdToDocument.set(obj.id, this.currentDocumentUri);
                 }
             }
-            
+
             if (this.currentDocumentUri) {
                 if (obj.type === "vertex") {
                     this.database.documents.get(this.currentDocumentUri)!.vertices.push(obj);
@@ -68,7 +67,7 @@ export class LSIFBackend {
                 }
             }
         });
-        
+
         const unsortedData = this.database.documents.get("unsorted");
         if (unsortedData) {
             for (const edge of unsortedData.edges) {
@@ -89,10 +88,10 @@ export class LSIFBackend {
                         }
                     }
                 }
-            }  
+            }
             this.database.documents.delete("unsorted");
         }
-        
+
         this.lsifChannel.appendLine(`[Database] Finished loading LSIF data.`);
         this.database.documents.forEach((data, uri) => {
             this.logger(`[Database] Document: ${uri}, Vertices: ${data.vertices.length}, Edges: ${data.edges.length}`);
@@ -106,31 +105,31 @@ export class LSIFBackend {
         position.character += 1;
         this.logger(`~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`);
         this.logger(`[Hover Help] Hover request for URI: ${documentUri} at position: ${position.line}:${position.character}`);
-        
-        // Find the correct document 
+
+        // Find the correct document
         const documentData = this.database.documents.get(documentUri);
         if (!documentData) {
             this.logger(`[Hover Help] No document found for URI: ${documentUri}`);
             return null;
         }
-        
+
         // Find the contains edge that links all the ranges to the document
-        let containsEdge = documentData.edges.find(edge => edge.label === 'contains');
+        const containsEdge = documentData.edges.find(edge => edge.label === 'contains');
         if (!containsEdge) {
             this.logger(`[Hover Help] No contains edge found for document: ${documentUri}`);
             return null;
         }
-        
+
         // Loop through the ranges in the contains edge to find the matching range to our requested position
         for (const rangeId of containsEdge.inVs) {
             const range = documentData.vertices.find(vertex => vertex.id === rangeId);
             if (!range || range.label !== 'range') continue;
-            
+
             if (position.line >= range.start.line && position.line <= range.end.line &&
                 position.character >= range.start.character && position.character <= range.end.character) {
-                
+
                 this.logger(`[Hover Help] Position matched range: ${JSON.stringify(range)}`);
-                
+
                 // For matched range, loop through edges to find either a next edge or a textDocument/hover edge that matches
                 for (const edge of documentData.edges) {
                     if (edge.label === 'next' && edge.outV === range.id) {
@@ -156,7 +155,7 @@ export class LSIFBackend {
                 }
             }
         }
-        
+
         this.logger('[Hover Help] No hover data matched.');
         return null;
     }
@@ -168,33 +167,33 @@ export class LSIFBackend {
         position.character += 1;
         this.logger(`~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`);
         this.logger(`[Definition Help] Definition requested for URI: ${documentUri} at position: ${position.line}:${position.character}`);
-        
+
         // Find the correct document
         const documentData = this.database.documents.get(documentUri);
         if (!documentData) {
             this.logger(`[Definition Help] No document found for URI: ${documentUri}`);
             return null;
         }
-        
+
         // Find the contains edge linked to that document
         const containsEdge = documentData.edges.find(edge => edge.label === 'contains');
         if (!containsEdge) {
             this.logger(`[Definition Help] No contains edge found for document: ${documentUri}`);
             return null;
         }
-        
+
         const locations: vscode.Location[] = [];
 
         // Loop through the ranges in the contains edge to find one that matches the requested position
         for (const rangeId of containsEdge.inVs) {
             const range = documentData.vertices.find(vertex => vertex.id === rangeId);
             if (!range || range.label !== 'range') continue;
-            
+
             if (position.line >= range.start.line && position.line <= range.end.line &&
                 position.character >= range.start.character && position.character <= range.end.character) {
-                
+
                 this.logger(`[Definition Help] Position matched range: ${JSON.stringify(range)}`);
-                
+
                 // Loop through and search for an item edge that contains the range id of the reference
                 for (const referenceItem of documentData.edges) {
                     if (referenceItem.label === "item" && referenceItem.inVs?.includes(range.id)) {
@@ -224,7 +223,7 @@ export class LSIFBackend {
                 }
             }
         }
-        
+
         if (locations.length === 0) {
             this.logger(`[Definition Help] No definition locations found.`);
             return null;
@@ -239,21 +238,21 @@ export class LSIFBackend {
         position.character += 1;
         this.logger(`~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~`);
         this.logger(`[References Help] Reference requested for URI: ${documentUri} at position: ${position.line}:${position.character}`);
-        
+
         // Find the correct document
         const documentData = this.database.documents.get(documentUri);
         if (!documentData) {
             this.logger(`[References Help] No document found for URI: ${documentUri}`);
             return null;
         }
-        
+
         // Find the contains edge linked to that document
         const containsEdge = documentData.edges.find(edge => edge.label === 'contains');
         if (!containsEdge) {
             this.logger(`[References Help] No contains edge found for document: ${documentUri}`);
             return null;
         }
-        
+
         // Loop through the ranges in the contains edge and look for the range with the requested position
         let rangeVertex: any | undefined;
         for (const rangeID of containsEdge.inVs) {
@@ -266,12 +265,12 @@ export class LSIFBackend {
                 break;
             }
         }
-        
+
         if (!rangeVertex) {
             this.logger('[References Help] No range vertex found for position.');
             return null;
         }
-        
+
         // Find an edge vertex that links to the resultSet
         const resultSetEdge = documentData.edges.find(edge => edge.label === 'next' && edge.outV === rangeVertex.id);
         if (!resultSetEdge) {
@@ -279,7 +278,7 @@ export class LSIFBackend {
             return null;
         }
         this.logger(`[References Help] Found resultSetEdge: ${JSON.stringify(resultSetEdge)}`);
-        
+
         // Find the resultSet vertex from the edge
         const resultSetVertex = documentData.vertices.find(vertex => vertex.id === resultSetEdge.inV && vertex.label === 'resultSet');
         if (!resultSetVertex) {
@@ -306,12 +305,12 @@ export class LSIFBackend {
 
         // Loop through and find all possible reference edges for that referenceResult
         let referenceEdges: any[] = [];
-        for (const [uri, docData] of this.database.documents.entries()) {
+        for (const docData of this.database.documents.values()) {
             const items = docData.edges.filter(edge => edge.label === "item" && edge.outV === referenceResult.id && edge.property === 'references');
             referenceEdges = referenceEdges.concat(items);
             this.logger(`[References Help] Current referenceEdges: ${JSON.stringify(referenceResult)}`);
         }
-        
+
         if (referenceEdges.length === 0) {
             this.logger(`[References Help] No item edges found for reference result.`);
             return null;
@@ -323,7 +322,7 @@ export class LSIFBackend {
             const targetDocumentUri = this.database.vertexIdToDocument.get(itemEdge.shard) || documentUri;
             const targetDocumentData = this.database.documents.get(targetDocumentUri);
             if (!targetDocumentData) continue;
-    
+
             // Loop through the ranges of the item edges of the found references and save their position
             for (const rangeId of itemEdge.inVs) {
                 const referenceRange = targetDocumentData.vertices.find(vertex => vertex.id === rangeId && vertex.label === 'range');
@@ -341,7 +340,7 @@ export class LSIFBackend {
             this.logger('[References Help] No references found.');
             return null;
         }
-        
+
         // Return all positions found for references if any
         return locations;
     }

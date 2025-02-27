@@ -20,12 +20,12 @@ import {
 import { LSIFBackend } from './lsifBackend';
 
 import {
-	LanguageClient,
-	LanguageClientOptions,
-	ServerOptions,
-	TransportKind,
-	SocketTransport,
-	Executable,
+    LanguageClient,
+    LanguageClientOptions,
+    ServerOptions,
+    TransportKind,
+    SocketTransport,
+    Executable,
     Disposable,
 } from 'vscode-languageclient/node';
 
@@ -33,15 +33,15 @@ let client: LanguageClient;
 let lsifChannel: OutputChannel;
 let lsifBackend: LSIFBackend;
 let lsifProviders: Disposable[] = [];
-let lsifStarted: Boolean;
+let lsifStarted: boolean;
 let lspStartUp = false;
 
 
 export function activate(context: ExtensionContext) {
-	lsifChannel = window.createOutputChannel('Unicon LSIF Helper');
+    lsifChannel = window.createOutputChannel('Unicon LSIF Helper');
     lsifChannel.appendLine('Unicon LSIF Helper is now active!');
 
-    //  Get current user settings and apply 
+    //  Get current user settings and apply
     lsifBackend = new LSIFBackend(lsifChannel);
     const config = workspace.getConfiguration("lspMain");
     const mode = config.get<string>("mode") || "Both";
@@ -71,13 +71,13 @@ export function activate(context: ExtensionContext) {
         if (event.affectsConfiguration("lspMain.logLevel")) {
             const newLogLevel = workspace.getConfiguration("lspMain").get<number>("logLevel") ?? 7;
             lsifChannel.appendLine(`[Config] Updated log level to ${newLogLevel}`);
-        
+
             //  Check if a client is already running
             if (client) {
                 lsifChannel.appendLine("[Config] LSP client will restart to apply new log level.");
                 try {
                     //  await commands.executeCommand("setContext", "config.lspMain.logLevelChangeAllowed", false);
-                    client.stop(); 
+                    client.stop();
                     //
                     lsifChannel.appendLine("[Config] LSP client stopped.");
                     client = undefined;
@@ -93,19 +93,19 @@ export function activate(context: ExtensionContext) {
             } else {
                 lsifChannel.appendLine("[Config] LSP client is not running. Log level will be applied on next startup.");
             }
-        } 
-        
+        }
+
         //  Listen for LSIF Debug Logs change
         if (event.affectsConfiguration("lspMain.enableDebugLogs")) {
             const newDebugLogs = workspace.getConfiguration("lspMain").get<boolean>("enableDebugLogs") ?? false;
             lsifBackend.updateDebugSetting(newDebugLogs);
         }
-        
+
         //  Listen for Mode change
         if (event.affectsConfiguration("lspMain.mode")) {
             const newMode = workspace.getConfiguration("lspMain").get<string>("mode") || "Both";
             lsifChannel.appendLine(`[Config] Mode changed to: ${newMode}`);
-        
+
             //  If we don't want LSP and it is running then shut it down
             if ((newMode === "LSIF only" || newMode === "Neither") && client) {
                 lsifChannel.appendLine("[Config] Stopping LSP client.");
@@ -133,12 +133,12 @@ export function activate(context: ExtensionContext) {
                 lsifChannel.appendLine("[Config] Starting LSIF backend.");
                 startLSIF(context);
                 lsifStarted = true;
-            }   
+            }
         }
     });
 
-	//  Register the load LSIF file command
-    let loadCommand = commands.registerCommand('extension.loadLsifFile', async () => {
+    //  Register the load LSIF file command
+    const loadCommand = commands.registerCommand('extension.loadLsifFile', async () => {
         //  Show the open file screen
         const uri = await window.showOpenDialog({
             canSelectMany: false,
@@ -165,21 +165,22 @@ export function activate(context: ExtensionContext) {
     context.subscriptions.push(loadCommand);
 }
 
-//  Start up LSIF by automatically finding the file, ensuring the project root is the same 
+//  Start up LSIF by automatically finding the file, ensuring the project root is the same
 //  as the user's Unicon root directory, and then register providers for hover, definition,
 //  and references.
 function startLSIF(context: ExtensionContext) {
-	const workspaceFolders = workspace.workspaceFolders;
+    const workspaceFolders = workspace.workspaceFolders;
     lsifBackend = new LSIFBackend(lsifChannel);
     const currentDebugLogs = workspace.getConfiguration("lspMain").get<boolean>("enableDebugLogs") ?? false;
     lsifBackend.updateDebugSetting(currentDebugLogs);
+    lsifChannel.show();
 
     if (!workspaceFolders) {
         lsifChannel.appendLine("[Activation] No workspace folder detected.");
         return;
     }
 
-	//  Look through folders until we find a file with .lsif extension
+    //  Look through folders until we find a file with .lsif extension
     let lsifFilePath: string | null = null;
     for (const folder of workspaceFolders) {
         const folderPath = folder.uri.fsPath;
@@ -187,7 +188,6 @@ function startLSIF(context: ExtensionContext) {
 
         if (lsifFilePath) {
             lsifChannel.appendLine(`[Activation] Found LSIF file: ${lsifFilePath}`);
-			lsifChannel.show();
             break;
         }
     }
@@ -202,19 +202,31 @@ function startLSIF(context: ExtensionContext) {
             lsifChannel.appendLine(`[Activation] Failed to process LSIF file: ${error.message}`);
         }
     } else {
-        lsifChannel.appendLine("[Activation] No LSIF file found in the current workspace.");
+        lsifChannel.appendLine("[Activation] No LSIF file found in the current workspace. Using default instead.");
+        try {
+            lsifFilePath = path.join(context.extensionPath, "data", "unicon.lsif");
+            try {
+                const updatedFilePath = correctUniconRoot(lsifFilePath);
+                lsifBackend.load(updatedFilePath);
+                lsifChannel.appendLine("[Activation] LSIF file loaded successfully.");
+            } catch (error) {
+                lsifChannel.appendLine(`[Activation] Failed to process LSIF file: ${error.message}`);
+            }
+        } catch (error) {
+            lsifChannel.appendLine(`[Activation] Failed to process LSIF file: ${error.message}`);
+        }
     }
 
     //  Register hover provider and call getHoverData on backend
     const hoverProvider = languages.registerHoverProvider({ scheme: 'file' }, {
-		provideHover(document, position) {
+        provideHover(document, position) {
             const hoverData = lsifBackend.getHoverData(document.uri.toString(), {
                 line: position.line,
                 character: position.character
             });
-			//  If hover data is found, return it. If not then send a request to LSP 
+            //  If hover data is found, return it. If not then send a request to LSP
             if (hoverData) {
-				lsifChannel.appendLine(`[Hover Help] HoverData: ${hoverData}`);
+                lsifChannel.appendLine(`[Hover Help] HoverData: ${hoverData}`);
                 return new Hover(hoverData);
             } else if (client && lspStartUp) {
                 lsifChannel.appendLine(`[Hover Help] No LSIF result, falling back to LSP.`);
@@ -228,18 +240,18 @@ function startLSIF(context: ExtensionContext) {
     });
 
     //  Register definitionProvider and call getDefinitionData on backend
-	const definitionProvider = languages.registerDefinitionProvider({ scheme: 'file' }, {
-		provideDefinition(document, position) {
-			const definitionLocations = lsifBackend.getDefinitionData(document.uri.toString(), {
-				line: position.line,
-				character: position.character
-			});
-	
+    const definitionProvider = languages.registerDefinitionProvider({ scheme: 'file' }, {
+        provideDefinition(document, position) {
+            const definitionLocations = lsifBackend.getDefinitionData(document.uri.toString(), {
+                line: position.line,
+                character: position.character
+            });
+
             //  If a definition location is found, return it. If not, send the request to LSP
-			if (definitionLocations && definitionLocations.length > 0) {
-				lsifChannel.appendLine(`[Definition Help] Definition locations found: ${JSON.stringify(definitionLocations)}`);
-				return definitionLocations;
-			} else if (client && lspStartUp) {
+            if (definitionLocations && definitionLocations.length > 0) {
+                lsifChannel.appendLine(`[Definition Help] Definition locations found: ${JSON.stringify(definitionLocations)}`);
+                return definitionLocations;
+            } else if (client && lspStartUp) {
                 lsifChannel.appendLine(`[Definition Help] No LSIF result, falling back to LSP.`);
                 return client.sendRequest("textDocument/definition", {
                     textDocument: { uri: document.uri.toString() },
@@ -247,17 +259,17 @@ function startLSIF(context: ExtensionContext) {
                 });
             }
             return undefined;
-		}
-	});
+        }
+    });
 
     // Register referencesProvider and call getReferencesData on backend
     const referencesProvider = languages.registerReferenceProvider({ scheme: 'file' }, {
-        provideReferences(document, position, context, token) {
+        provideReferences(document, position) {
             const references = lsifBackend.getReferencesData(document.uri.toString(), {
                 line: position.line,
                 character: position.character
             });
-            
+
             // If references are found, return them. If not then return undefined.
             if (references && references.length > 0) {
                 lsifChannel.appendLine(`[References Help] References found: ${JSON.stringify(references)}`);
@@ -268,15 +280,15 @@ function startLSIF(context: ExtensionContext) {
             }
         }
     });
-    
+
     lsifProviders = [hoverProvider, definitionProvider, referencesProvider];
     context.subscriptions.push(...lsifProviders);
 }
 
 // Function to look in unicon/uni/ulsp folder for a .lsif file
 function findLSIFFile(folderPath: string): string | null {
-	const targetPath = path.join(folderPath, 'uni', 'ulsp');
-	const files = fs.readdirSync(targetPath);
+    const targetPath = path.join(folderPath, 'uni', 'ulsp');
+    const files = fs.readdirSync(targetPath);
     for (const file of files) {
         if (file.endsWith('.lsif')) {
             return path.join(targetPath, file);
@@ -285,13 +297,26 @@ function findLSIFFile(folderPath: string): string | null {
     return null;
 }
 
-// Function to ensure that the metaData vertex projectRoot field matches with the 
+// Function to ensure that the metaData vertex projectRoot field matches with the
 // current workspace's unicon root folder, change it if not
 function correctUniconRoot(lsifFilePath: string): string {
     const fileContent = fs.readFileSync(lsifFilePath, 'utf8');
-    const lsifDirectory = path.dirname(lsifFilePath).replace(/\\/g, '/');
+
+    const workspaceFolders = workspace.workspaceFolders;
+    let uniconRoot: string | null = null;
+
+    if (workspaceFolders && workspaceFolders.length > 0) {
+        uniconRoot = workspaceFolders[0].uri.fsPath;
+    }
+
+    if (!uniconRoot) {
+        lsifChannel.appendLine("[Activation] No workspace detected. Unable to determine the Unicon root directory.");
+        return lsifFilePath;
+    }
+
+    const formattedRoot = uniconRoot.replace(/\\/g, '/');
     const platformRoot = process.platform === 'win32' ? '/' : '';
-    const correctRoot = `file://${platformRoot}${lsifDirectory.split('/unicon/')[0]}/unicon/`;
+    const correctRoot = `file://${platformRoot}${formattedRoot}/`;
     const rootRegex = /file:\/\/\/?.*\/unicon\//;
     const firstMatch = fileContent.match(rootRegex);
 
@@ -299,7 +324,7 @@ function correctUniconRoot(lsifFilePath: string): string {
         const currentRoot = firstMatch[0];
         if (currentRoot !== correctRoot) {
             const updatedContent = fileContent.replace(new RegExp(currentRoot, 'g'), correctRoot);
-			const sanitizedContent = updatedContent.replace(new RegExp(`${correctRoot}(.+?)\\1`, 'g'), `${correctRoot}$1`);
+            const sanitizedContent = updatedContent.replace(new RegExp(`${correctRoot}(.+?)\\1`, 'g'), `${correctRoot}$1`);
             fs.writeFileSync(lsifFilePath, sanitizedContent, 'utf8');
             lsifChannel.appendLine(`[Activation] Updated Unicon root directory in LSIF file to the correct root: ${correctRoot}`);
         }
@@ -313,50 +338,48 @@ function correctUniconRoot(lsifFilePath: string): string {
 async function startLSP(logLevel = 7) {
     lspStartUp = false;
     const transport: SocketTransport = { kind: TransportKind.socket, port: 7979 };
-	// const options: ExecutableOptions = { detached: true, shell: true };
-	const unicon: Executable = { command: 'ulsp', transport: transport, args: ["-c", "--loglevel", logLevel.toString()] };
-	const serverOptions: ServerOptions = {
-	    run: unicon,
-	    debug: unicon
-	};
-
-
-	// Options to control the language client
-	const clientOptions: LanguageClientOptions = {
-	 	// Register the server for plain text documents
-	   	documentSelector: [{ scheme: 'file', language: 'unicon' }],
+    // const options: ExecutableOptions = { detached: true, shell: true };
+    const unicon: Executable = { command: 'ulsp', transport: transport, args: ["-c", "--loglevel", logLevel.toString()] };
+    const serverOptions: ServerOptions = {
+        run: unicon,
+        debug: unicon
+    };
+    // Options to control the language client
+    const clientOptions: LanguageClientOptions = {
+         // Register the server for plain text documents
+           documentSelector: [{ scheme: 'file', language: 'unicon' }],
         // outputChannel: lspChannel,
-	   	synchronize: {
-	   		// Notify the server about file changes to '.clientrc files contained in the workspace
-	   		fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
-	   	},
+           synchronize: {
+               // Notify the server about file changes to '.clientrc files contained in the workspace
+               fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
+           },
            middleware: {
             async provideHover(document, position, token, next) {
                 if (!lspStartUp) return undefined;
-                if (lsifBackend && lsifBackend.getHoverData(document.uri.toString(), { line: position.line, character: position.character })) {
+                if (lsifStarted && lsifBackend.getHoverData(document.uri.toString(), { line: position.line, character: position.character })) {
                     return undefined;
                 }
                 return next(document, position, token);
             },
             async provideDefinition(document, position, token, next) {
                 if (!lspStartUp) return undefined;
-                if (lsifBackend && lsifBackend.getDefinitionData(document.uri.toString(), { line: position.line, character: position.character })) {
+                if (lsifStarted && lsifBackend.getDefinitionData(document.uri.toString(), { line: position.line, character: position.character })) {
                     return undefined;
                 }
                 return next(document, position, token);
             }
         }
-	};
+    };
 
-	client = new LanguageClient(
-	    'uniconLanguageServer',
-	    'Unicon Language Server',
-	    serverOptions,
-	    clientOptions
-	);
+    client = new LanguageClient(
+        'uniconLanguageServer',
+        'Unicon Language Server',
+        serverOptions,
+        clientOptions
+    );
 
     lsifChannel.appendLine("[Activation] LSP is starting, please wait...");
-	await client.start();
+    await client.start();
 
     // Set a delay timer before enabling LSP requests
     setTimeout(() => {
@@ -367,8 +390,8 @@ async function startLSP(logLevel = 7) {
 
 
 export function deactivate(): Thenable<void> | undefined {
-	if (!client) {
-		return undefined;
-	}
-	return client.stop();
+    if (!client) {
+        return undefined;
+    }
+    return client.stop();
 }
