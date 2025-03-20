@@ -27,25 +27,25 @@
             }
         ],
         "configuration": {
-            "title": "Unicon LSP Main",
+            "title": "Unicon Helper",
             "properties": {
-                "lspMain.enableDebugLogs": {
+                "uniconHelper.enableDebugLogs": {
                     "type": "boolean",
                     "default": false,
                     "description": "Enable LSIF debug logging."
                 },
-                "lspMain.mode": {
+                "uniconHelper.mode": {
                     "type": "string",
                     "default": "Both",
                     "enum": [
                         "LSIF only",
-                        "LSP only",
+                        "ULSP only",
                         "Neither",
                         "Both"
                     ],
-                    "description": "Choose how to handle language support: LSIF only, LSP only, Neither, or Both."
+                    "description": "Choose how to handle Unicon language support: LSIF only, ULSP only, Neither, or Both."
                 },
-                "lspMain.logLevel": {
+                "uniconHelper.logLevel": {
                     "type": "integer",
                     "default": 7,
                     "enum": [
@@ -88,7 +88,7 @@
                         "debug8 (16)",
                         "debug9 (17)"
                     ],
-                    "description": "Set the log level for LSP.",
+                    "description": "Set the log level for ULSP.",
                     "scope": "resource"
                 }
             }

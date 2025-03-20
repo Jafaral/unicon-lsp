@@ -23,11 +23,10 @@ export class LSIFBackend {
     // Updates whether or not logger messages go through
     updateDebugSetting(enabled: boolean): void {
         this.enableDebugLogs = enabled;
-        this.lsifChannel.appendLine(`[Config] LSIF debug logging is ${enabled ? "ENABLED" : "DISABLED"}.`);
     }
 
     // If debug messages are enabled the logger will send them through
-    private logger(message: string): void {
+    public logger(message: string): void {
         if (this.enableDebugLogs) {
             this.lsifChannel.appendLine(message);
         }
@@ -36,7 +35,7 @@ export class LSIFBackend {
     // Reads in and loads the given file for LSIF JSON information and splits it up according
     // to connected document and by vertices and edges
     load(filePath: string): void {
-        this.lsifChannel.appendLine(`[Database] Loading LSIF file into backend from: ${filePath}`);
+        this.logger(`[Database] Loading LSIF file into backend from: ${filePath}`);
 
         const fileContent = fs.readFileSync(filePath, 'utf-8');
         const lines = fileContent.split('\n').filter(line => line.trim() !== '');
@@ -92,7 +91,7 @@ export class LSIFBackend {
             this.database.documents.delete("unsorted");
         }
 
-        this.lsifChannel.appendLine(`[Database] Finished loading LSIF data.`);
+        this.logger(`[Database] Finished loading LSIF data.`);
         this.database.documents.forEach((data, uri) => {
             this.logger(`[Database] Document: ${uri}, Vertices: ${data.vertices.length}, Edges: ${data.edges.length}`);
         });
