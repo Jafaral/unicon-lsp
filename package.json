@@ -4,7 +4,7 @@
     "description": "Unicon Programming Language LSP",
     "author": "Unicon LSP Team",
     "license": "MIT",
-    "version": "0.7.0",
+    "version": "0.9.0",
     "publisher": "jafar",
     "contributes": {
         "languages": [
@@ -112,8 +112,10 @@
     },
     "scripts": {
         "vscode:prepublish": "npm run compile",
+        "clean": "tsc -b --clean",
         "compile": "tsc -b",
-        "watch": "tsc -b -w"
+        "watch": "tsc -b -w",
+        "lint": "eslint ./src"
     },
     "engines": {
         "vscode": "^1.73.0"
