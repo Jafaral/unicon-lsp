@@ -3,8 +3,9 @@
 This extension provides supports for Union Programming Language using:
 - Language Server Protocol (LSP)
 - Language Server Index Format (LSIF)
+- Code Snippets
 
-LSIF support is baked into the extension itself. LSP requires running
+LSIF support and code snippets are baked into the extension itself. LSP requires running
 Unicon Language Server which is shipped with Unicon sources.
 See LSP Requirements below.
 

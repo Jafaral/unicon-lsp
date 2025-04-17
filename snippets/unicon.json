@@ -1,0 +1,165 @@
+{
+	"Procedure Template": {
+		"prefix": "pro",
+		"body": [
+			"#<p>",
+			"#   ${3:Procedure Description}",
+			"#   <[param ${4:args} ${5:description of first argument}]>",
+			"#   <[returns ${6:description of return value}]>",
+			"#</p>",
+			"procedure ${1:name}(${2:args})",
+			"\tlocal ${7:# variables}",
+			"\t${8:# your code here}",
+			"end",
+			""
+		],
+		"description": "Create a procedure"
+	},
+	"Main Procedure": {
+		"prefix": "mai",
+		"body": [
+			"#<p>",
+			"#   ${2:Procedure Description}",
+			"#   <[param ${3:args} ${4:description of first argument}]>",
+			"#   <[returns ${5:description of return value}]>",
+			"#</p>",
+			"procedure main(${1:args})",
+			"\tlocal ${6:# variables}",
+			"\t${0:# your code here}",
+			"end",
+			""
+		],
+		"description": "Create a main procedure"
+	},
+	"Class Template": {
+		"prefix": "cla",
+		"body": [
+			"#<p>",
+			"#   ${3:Class Description}",
+			"#</p>",
+			"class ${1:className}(${2:args})",
+			"#<p>",
+			"#   ${8:Method Description}",
+			"#   <[param ${9:args} ${10:description of first argument}]>",
+			"#   <[returns ${11:description of return value}]>",
+			"#</p>",
+			"\tmethod ${6:methodName}(${7:args})",
+			"\t\tlocal ${12:# variables}",
+			"\t\t${0:# your code here}",
+			"\tend",
+			"",
+			"\tinitially(${4:args})",
+			"\t\t${5:# your code here}",
+			"end",
+			""
+		],
+		"description": "Create a class"
+	},
+	"Method Template": {
+		"prefix": "met",
+		"body": [
+			"#<p>",
+			"#   ${3:Method Description}",
+			"#   <[param ${4:args} ${5:description of first argument}]>",
+			"#   <[returns ${6:description of return value}]>",
+			"#</p>",
+			"method ${1:name}(${2:args})",
+			"\tlocal ${7:# variables}",
+			"\t${0:# your code here}",
+			"end",
+			""
+		],
+		"description": "Create a method for a class"
+	},
+	"Write Statement": {
+		"prefix": "wre",
+		"body": [
+			"write(${0:message})"
+		],
+		"description": "Create a write statement"
+	},
+	"While Loop": {
+		"prefix": "whi",
+		"body": [
+			"while ${1:condition} do {",
+			"\t${0:# your code here}",
+			"}"
+		],
+		"description": "Create a while loop"
+	},
+	"If Statement": {
+		"prefix": "if",
+		"body": [
+			"if ${1:condition} then {",
+			"\t${0:# your code here}",
+			"}"
+		],
+		"description": "Create an if statement"
+	},
+	"If-Else Statement": {
+		"prefix": "ife",
+		"body": [
+			"if ${1:condition} then {",
+			"\t${2:# if true}",
+			"} else {",
+			"\t${3:# if false}",
+			"}"
+		],
+		"description": "Create an if-else statement"
+	},
+	"Every Loop": {
+		"prefix": "eve",
+		"body": [
+			"every ${1:var} := ${2:!list} do {",
+			"\t${0:# loop body}",
+			"}"
+		],
+		"description": "Create an every loop"
+	},
+	"Repeat Loop": {
+		"prefix": "rep",
+		"body": [
+			"repeat {",
+			"\t${1:# your code here}",
+			"\tif ${2:condition} then break",
+			"}"
+		],
+		"description": "Create a repeat loop"
+	},
+	"Case Statement": {
+		"prefix": "cas",
+		"body": [
+			"case ${1:expression} of {",
+			"\t${2:value1}: ${3:# code1}",
+			"\t${4:value2}: ${5:# code2}",
+			"\tdefault: ${6:# default code}",
+			"}"
+		],
+		"description": "Create a case statement"
+	},
+	"Suspend Statement": {
+		"prefix": "sus",
+		"body": [
+			"suspend ${1:expression1} do {",
+			"\t${0:expression2}",
+			"}"
+		],
+		"description": "Create a suspend statement"
+	},
+	"Until Statement": {
+		"prefix": "unt",
+		"body": [
+			"until ${1:expression1} do {",
+			"\t${0:expression2}",
+			"}"
+		],
+		"description": "Create an until statement"
+	},
+	"critical Statement": {
+		"prefix": "cri",
+		"body": [
+			"critical ${1:mutex} : ${0:expression}"
+		],
+		"description": "Create a critical statement"
+	}
+}
