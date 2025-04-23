@@ -9,6 +9,14 @@ LSIF support and code snippets are baked into the extension itself. LSP requires
 Unicon Language Server which is shipped with Unicon sources.
 See LSP Requirements below.
 
+To use code snippets, see example below:
+
+![SnippetsDemo1](snippets/Demo1.gif)
+
+You can tab through each option in order like this:
+
+![SnippetsDemo2](snippets/Demo2.gif)
+
 Brought to you by:
 - Mark Stowell
 - Max Streeter
